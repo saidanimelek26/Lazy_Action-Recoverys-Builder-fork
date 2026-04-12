@@ -135,21 +135,18 @@ jobs:
         BOARD_CONFIG="${{ env.DEVICE_DIRECTORY }}/BoardConfig.mk"
         
         if [ -f "$BOARD_CONFIG" ]; then
-            echo "Original BoardConfig.mk:"
-            grep -E "PLATFORM_SECURITY_PATCH|PLATFORM_VERSION|TARGET_RELEASED" "$BOARD_CONFIG" || echo "No problematic lines found"
+            echo "Fixing BoardConfig.mk..."
+            sed -i 's/^PLATFORM_SECURITY_PATCH/#PLATFORM_SECURITY_PATCH/g' "$BOARD_CONFIG"
+            sed -i 's/^PLATFORM_VERSION/#PLATFORM_VERSION/g' "$BOARD_CONFIG"
+            sed -i 's/^TARGET_RELEASED/#TARGET_RELEASED/g' "$BOARD_CONFIG"
             
-            sed -i 's/^\(PLATFORM_SECURITY_PATH\s*:=\)/#\1/' "$BOARD_CONFIG"
-            sed -i 's/^\(PLATFORM_VERSION\s*:=\)/#\1/' "$BOARD_CONFIG"
-            sed -i 's/^\(TARGET_RELEASED\s*:=\)/#\1/' "$BOARD_CONFIG"
+            echo "" >> "$BOARD_CONFIG"
+            echo "# Recovery flags" >> "$BOARD_CONFIG"
+            echo "TARGET_NO_RECOVERY := true" >> "$BOARD_CONFIG"
+            echo "BOARD_USES_RECOVERY_AS_BOOT := true" >> "$BOARD_CONFIG"
+            echo "BOARD_SUPPRESS_SECURE_ERASE := true" >> "$BOARD_CONFIG"
+            echo "TW_NO_LEGACY_PROPS := true" >> "$BOARD_CONFIG"
             
-            cat >> "$BOARD_CONFIG" << 'EOF'
-
-# Recovery flags
-TARGET_NO_RECOVERY := true
-BOARD_USES_RECOVERY_AS_BOOT := true
-BOARD_SUPPRESS_SECURE_ERASE := true
-TW_NO_LEGACY_PROPS := true
-EOF
             echo "BoardConfig.mk fixed"
         else
             echo "Warning: BoardConfig.mk not found"
@@ -159,27 +156,23 @@ EOF
       run: |
         cd android-recovery
         
-        cat > "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk" << EOF
-PRODUCT_MAKEFILES := \\
-    \$(LOCAL_DIR)/lineage_${{ env.DEVICE_NAME }}.mk
-EOF
+        echo "PRODUCT_MAKEFILES := \\" > "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk"
+        echo "    \$(LOCAL_DIR)/lineage_${{ env.DEVICE_NAME }}.mk" >> "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk"
         
-        cat > "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk" << EOF
-# Inherit from device makefile
-\$(call inherit-product, device/${{ env.BRAND }}/${{ env.DEVICE_NAME }}/device.mk)
-
-# Inherit common Lineage stuff
-\$(call inherit-product, vendor/lineage/config/common_full_phone.mk)
-
-# Device identifier
-PRODUCT_NAME := lineage_${{ env.DEVICE_NAME }}
-PRODUCT_DEVICE := ${{ env.DEVICE_NAME }}
-PRODUCT_BRAND := ${{ env.BRAND }}
-PRODUCT_MODEL := ${{ env.DEVICE_NAME }}
-PRODUCT_MANUFACTURER := ${{ env.BRAND }}
-
-PRODUCT_GMS_CLIENTID_BASE := android-${{ env.BRAND }}
-EOF
+        echo "# Inherit from device makefile" > "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "\$(call inherit-product, device/${{ env.BRAND }}/${{ env.DEVICE_NAME }}/device.mk)" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "# Inherit common Lineage stuff" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "\$(call inherit-product, vendor/lineage/config/common_full_phone.mk)" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "# Device identifier" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "PRODUCT_NAME := lineage_${{ env.DEVICE_NAME }}" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "PRODUCT_DEVICE := ${{ env.DEVICE_NAME }}" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "PRODUCT_BRAND := ${{ env.BRAND }}" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "PRODUCT_MODEL := ${{ env.DEVICE_NAME }}" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "PRODUCT_MANUFACTURER := ${{ env.BRAND }}" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
+        echo "PRODUCT_GMS_CLIENTID_BASE := android-${{ env.BRAND }}" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
         
         echo "Created makefiles for ${{ env.DEVICE_NAME }}"
         ls -la "${{ env.DEVICE_DIRECTORY }}/"
@@ -191,12 +184,10 @@ EOF
         
         REPO_NAME=$(echo "${{ inputs.DEVICE_TREE }}" | sed 's|https://github.com/||')
         
-        cat > .repo/local_manifests/roomservice.xml << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<manifest>
-  <project name="${REPO_NAME}" path="${{ env.DEVICE_DIRECTORY }}" remote="github" revision="${{ inputs.DEVICE_TREE_BRANCH }}" />
-</manifest>
-EOF
+        echo '<?xml version="1.0" encoding="UTF-8"?>' > .repo/local_manifests/roomservice.xml
+        echo '<manifest>' >> .repo/local_manifests/roomservice.xml
+        echo "  <project name=\"${REPO_NAME}\" path=\"${{ env.DEVICE_DIRECTORY }}\" remote=\"github\" revision=\"${{ inputs.DEVICE_TREE_BRANCH }}\" />" >> .repo/local_manifests/roomservice.xml
+        echo '</manifest>' >> .repo/local_manifests/roomservice.xml
         
         echo "Roomservice.xml created"
         cat .repo/local_manifests/roomservice.xml
