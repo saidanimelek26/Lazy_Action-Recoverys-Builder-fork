@@ -91,7 +91,6 @@ jobs:
         git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./device_tree
         cd device_tree
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
-        # Force device name to a22x based on your file
         echo "DEVICE_NAME=a22x" >> $GITHUB_ENV
         echo "BRAND=samsung" >> $GITHUB_ENV
 
@@ -109,12 +108,6 @@ jobs:
         mkdir -p "$DEVICE_DIRECTORY"
         cp -r device_tree/* "$DEVICE_DIRECTORY"/
         rm -rf device_tree
-        
-        # Keep the original AndroidProducts.mk from the device tree if it exists
-        if [ -f "$DEVICE_DIRECTORY/AndroidProducts.mk" ]; then
-            echo "Keeping original AndroidProducts.mk"
-            cat "$DEVICE_DIRECTORY/AndroidProducts.mk"
-        fi
 
     - name: Fix BoardConfig.mk
       run: |
@@ -124,12 +117,10 @@ jobs:
         
         if [ -f "$BOARD_CONFIG" ]; then
             echo "Fixing BoardConfig.mk..."
-            # Comment out readonly variables
             sed -i 's/^PLATFORM_SECURITY_PATCH/#PLATFORM_SECURITY_PATCH/g' "$BOARD_CONFIG"
             sed -i 's/^PLATFORM_VERSION/#PLATFORM_VERSION/g' "$BOARD_CONFIG"
             sed -i 's/^TARGET_RELEASED/#TARGET_RELEASED/g' "$BOARD_CONFIG"
             
-            # Add recovery flags if not present
             if ! grep -q "TARGET_NO_RECOVERY" "$BOARD_CONFIG"; then
                 echo "" >> "$BOARD_CONFIG"
                 echo "# Recovery flags" >> "$BOARD_CONFIG"
@@ -139,8 +130,6 @@ jobs:
             fi
             
             echo "BoardConfig.mk fixed"
-        else
-            echo "Warning: BoardConfig.mk not found at $BOARD_CONFIG"
         fi
 
     - name: Update AndroidProducts.mk
@@ -149,8 +138,7 @@ jobs:
         
         ANDROID_PRODUCTS="device/samsung/a22x/AndroidProducts.mk"
         
-        # Update AndroidProducts.mk with correct format
-        cat > "$ANDROID_PRODUCTS" << 'EOF'
+        cat > "$ANDROID_PRODUCTS" << EOF
 #
 # Copyright (C) 2020 The Android Open Source Project
 #
@@ -167,32 +155,29 @@ jobs:
 # limitations under the License.
 #
 
-PRODUCT_MAKEFILES := \
-    $(LOCAL_DIR)/lineage_a22x.mk
+PRODUCT_MAKEFILES := \\
+    \$(LOCAL_DIR)/lineage_a22x.mk
 
-COMMON_LUNCH_CHOICES := \
-    lineage_a22x-user \
-    lineage_a22x-userdebug \
+COMMON_LUNCH_CHOICES := \\
+    lineage_a22x-user \\
+    lineage_a22x-userdebug \\
     lineage_a22x-eng
 EOF
         
         echo "Updated AndroidProducts.mk"
-        cat "$ANDROID_PRODUCTS"
 
-    - name: Create lineage_a22x.mk if missing
+    - name: Create lineage_a22x.mk
       run: |
         cd android-recovery
         
         DEVICE_MK="device/samsung/a22x/lineage_a22x.mk"
         
-        if [ ! -f "$DEVICE_MK" ]; then
-            echo "Creating lineage_a22x.mk..."
-            cat > "$DEVICE_MK" << 'EOF'
+        cat > "$DEVICE_MK" << EOF
 # Inherit from device makefile
-$(call inherit-product, device/samsung/a22x/device.mk)
+\$(call inherit-product, device/samsung/a22x/device.mk)
 
 # Inherit common Lineage stuff
-$(call inherit-product, vendor/lineage/config/common_full_phone.mk)
+\$(call inherit-product, vendor/lineage/config/common_full_phone.mk)
 
 # Device identifier
 PRODUCT_NAME := lineage_a22x
@@ -203,10 +188,8 @@ PRODUCT_MANUFACTURER := samsung
 
 PRODUCT_GMS_CLIENTID_BASE := android-samsung
 EOF
-            echo "Created lineage_a22x.mk"
-        else
-            echo "lineage_a22x.mk already exists"
-        fi
+        
+        echo "Created lineage_a22x.mk"
 
     - name: Build Lineage Recovery
       run: |
@@ -214,15 +197,9 @@ EOF
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         
-        # List available lunch targets for debugging
-        echo "Available lunch targets:"
-        lunch
-        
-        # Directly lunch with the correct target
         echo "Building for lineage_a22x-eng"
         lunch lineage_a22x-eng
         
-        # Build recovery
         make clean
         make recoveryimage -j$(nproc --all)
 
@@ -249,7 +226,6 @@ EOF
             ls -lh "$RECOVERY_PATH"
         else
             echo "ERROR: Recovery image not found!"
-            echo "Searching for any img files:"
             find out/target -name "*.img" -type f 2>/dev/null || echo "No img files found"
             exit 1
         fi
@@ -271,8 +247,9 @@ EOF
           **Source Code:**
           - Device Tree: [${{ inputs.DEVICE_TREE }}](${{ inputs.DEVICE_TREE }})
           - Branch: ${{ inputs.DEVICE_TREE_BRANCH }}
-          - Commit: `${{ env.COMMIT_ID }}`
+          - Commit: ${{ env.COMMIT_ID }}
           
           **Installation:**
-          ```bash
           fastboot flash recovery recovery.img
+          
+          **Note:** Unofficial build - Use at your own risk
