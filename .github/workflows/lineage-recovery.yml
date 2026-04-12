@@ -15,11 +15,11 @@ on:
       DEVICE_TREE:
         description: 'Custom Recovery Tree'
         required: true
-        default: 'https://github.com/oliplusmzr/recovery_device_samsung_a24'
+        default: 'https://github.com/saidanimelek26/twrp_device_samsung_a22-5G'
       DEVICE_TREE_BRANCH:
         description: 'Custom Recovery Tree Branch'
         required: true
-        default: 'LineageRecovery'
+        default: 'los-tree'
       BUILD_TARGET:
         description: 'Build Target'
         required: true
@@ -131,7 +131,7 @@ jobs:
         
         # Fallback: use directory name
         if [ -z "$DEVICE_NAME" ]; then
-            DEVICE_NAME=$(basename "$(pwd)" | sed 's/device_//' | sed 's/recovery_//')
+            DEVICE_NAME=$(basename "$(pwd)" | sed 's/device_//' | sed 's/recovery_//' | sed 's/twrp_//')
             DEVICE_MAKEFILE="$DEVICE_NAME"
             BRAND="samsung"
         fi
@@ -155,7 +155,7 @@ jobs:
         
         cd ../
         mkdir -p "$DEVICE_DIRECTORY"
-        mv device_tree/* "$DEVICE_DIRECTORY"/
+        cp -r device_tree/* "$DEVICE_DIRECTORY"/
         rm -rf device_tree
 
     - name: Create Roomservice.xml
@@ -173,31 +173,37 @@ jobs:
         echo "Roomservice.xml created:"
         cat .repo/local_manifests/roomservice.xml
 
-    - name: Fix Dependencies
+    - name: Fix Device Tree Structure
       run: |
         cd android-recovery
         
-        # Check if device needs additional dependencies
-        if [ -f "${{ env.DEVICE_DIRECTORY }}/lineage.dependencies" ]; then
-          echo "Found lineage.dependencies, will sync dependencies..."
-          # Parse dependencies if needed
-        fi
-        
-        # Create a dummy device configuration if missing
+        # Ensure AndroidProducts.mk exists
         if [ ! -f "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk" ]; then
-          echo "Creating AndroidProducts.mk..."
-          cat > "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk" << EOF
+            echo "Creating AndroidProducts.mk..."
+            cat > "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk" << EOF
         PRODUCT_MAKEFILES := \\
             \$(LOCAL_DIR)/${{ env.DEVICE_MAKEFILE }}.mk
         EOF
         fi
         
-        # Ensure the main device makefile exists
-        if [ ! -f "${{ env.DEVICE_DIRECTORY }}/${{ env.DEVICE_MAKEFILE }}.mk" ]; then
-          echo "WARNING: Main device makefile not found!"
-          echo "Looking for available .mk files..."
-          ls -la "${{ env.DEVICE_DIRECTORY }}/"
+        # Ensure the main device makefile has proper structure
+        MAIN_MK="${{ env.DEVICE_DIRECTORY }}/${{ env.DEVICE_MAKEFILE }}.mk"
+        if [ ! -f "$MAIN_MK" ]; then
+            echo "Looking for existing makefiles..."
+            for mkfile in ${{ env.DEVICE_DIRECTORY }}/*.mk; do
+                if [ -f "$mkfile" ] && [[ ! "$mkfile" =~ "AndroidProducts" ]]; then
+                    echo "Found: $mkfile"
+                    if [ ! -f "$MAIN_MK" ]; then
+                        cp "$mkfile" "$MAIN_MK"
+                        echo "Copied to $MAIN_MK"
+                    fi
+                fi
+            done
         fi
+        
+        # Display device tree structure for debugging
+        echo "Device tree structure:"
+        ls -la "${{ env.DEVICE_DIRECTORY }}/"
 
     - name: Build Lineage Recovery
       run: |
@@ -206,38 +212,77 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         export WITH_SU=true
         
-        # Try to lunch with full device name
-        if ! lunch lineage_${{ env.DEVICE_NAME }}-eng 2>/dev/null; then
-            if ! lunch ${{ env.DEVICE_NAME }}-eng 2>/dev/null; then
-                if ! lunch ${{ env.DEVICE_MAKEFILE }}-eng 2>/dev/null; then
-                    echo "All lunch attempts failed!"
-                    echo "Available lunch targets:"
-                    lunch
-                    exit 1
-                fi
+        # First try to breakfast (setup device)
+        echo "Trying breakfast for lineage_${{ env.DEVICE_NAME }}..."
+        if breakfast lineage_${{ env.DEVICE_NAME }}; then
+            lunch lineage_${{ env.DEVICE_NAME }}-eng
+        else
+            echo "Breakfast failed, trying with device name only..."
+            if breakfast ${{ env.DEVICE_NAME }}; then
+                lunch ${{ env.DEVICE_NAME }}-eng
+            else
+                echo "Breakfast failed for all attempts!"
+                echo "Checking available devices..."
+                breakfast
+                exit 1
             fi
         fi
         
+        # Verify lunch succeeded
+        if [ $? -ne 0 ]; then
+            echo "Lunch failed!"
+            exit 1
+        fi
+        
+        # Build recovery
         make clean
         make ${{ inputs.BUILD_TARGET }}image -j$(nproc --all)
 
     - name: Set Build Date
       run: |
-        echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+        echo "BUILD_DATE=$(date +%Y%m%d_%H%M%S)" >> $GITHUB_ENV
+
+    - name: Find and Upload Recovery
+      run: |
+        cd android-recovery
+        
+        # Try to find the recovery image
+        RECOVERY_PATH=""
+        if [ -f "out/target/product/${{ env.DEVICE_NAME }}/recovery.img" ]; then
+            RECOVERY_PATH="out/target/product/${{ env.DEVICE_NAME }}/recovery.img"
+        elif [ -f "out/target/product/${{ env.DEVICE_NAME }}/${{ inputs.BUILD_TARGET }}.img" ]; then
+            RECOVERY_PATH="out/target/product/${{ env.DEVICE_NAME }}/${{ inputs.BUILD_TARGET }}.img"
+        else
+            echo "Looking for recovery image..."
+            find out/target -name "*.img" -type f
+        fi
+        
+        echo "RECOVERY_PATH=${RECOVERY_PATH}" >> $GITHUB_ENV
+        
+        if [ -z "$RECOVERY_PATH" ] || [ ! -f "$RECOVERY_PATH" ]; then
+            echo "Recovery image not found!"
+            exit 1
+        fi
 
     - name: Upload to Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/${{ inputs.BUILD_TARGET }}.img
+          android-recovery/${{ env.RECOVERY_PATH }}
         name: Unofficial Lineage Recovery for ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
         tag_name: ${{ github.run_id }}
         body: |
-          Manifest: ${{ inputs.MANIFEST_BRANCH }}
-          Tree: [Device Tree](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
-          Commit: [${{ env.COMMIT_ID }}](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }})
-          
-          **Device Information:**
+          **Build Information:**
+          - Manifest Branch: ${{ inputs.MANIFEST_BRANCH }}
           - Device: ${{ env.DEVICE_NAME }}
           - Brand: ${{ env.BRAND }}
-          - Makefile: ${{ env.DEVICE_MAKEFILE }}
+          - Build Date: ${{ env.BUILD_DATE }}
+          
+          **Sources:**
+          - Device Tree: [${{ inputs.DEVICE_TREE }}](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
+          - Commit: [${{ env.COMMIT_ID }}](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }})
+          
+          **Notes:**
+          - This is an unofficial build
+          - Use at your own risk
+          - Make sure to backup your data before flashing
