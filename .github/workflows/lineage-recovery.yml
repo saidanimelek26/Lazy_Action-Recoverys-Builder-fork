@@ -91,72 +91,106 @@ jobs:
         git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./device_tree
         cd device_tree
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
+        # Extract device name from folder or files
+        DEVICE_NAME_FALLBACK=$(basename "${{ inputs.DEVICE_TREE }}" | sed 's/twrp_device_//' | sed 's/recovery_device_//' | sed 's/device_//')
+        echo "DEVICE_NAME_FALLBACK=${DEVICE_NAME_FALLBACK}" >> $GITHUB_ENV
 
     - name: Setup Device Tree
       run: |
         cd android-recovery/device_tree
         
-        # Detect device information from makefiles
-        DEVICE_MAKEFILE=""
-        DEVICE_DIRECTORY=""
+        # Detect device information
         DEVICE_NAME=""
-        BRAND=""
+        BRAND="samsung"
         
-        # Method 1: Look for AndroidProducts.mk
-        if [ -f "AndroidProducts.mk" ]; then
-            # Get the main makefile from AndroidProducts.mk
-            MAIN_MAKEFILE=$(grep -E 'PRODUCT_MAKEFILES\s*:=' AndroidProducts.mk | head -1 | sed 's/.*:=\s*//' | sed 's/)\s*$//' | xargs | cut -d' ' -f1)
-            if [ -n "$MAIN_MAKEFILE" ]; then
-                DEVICE_MAKEFILE=$(basename "$MAIN_MAKEFILE" .mk)
-            fi
-            DEVICE_NAME=$(grep -oP 'PRODUCT_DEVICE[[:space:]]*:=\s*\K\S+' AndroidProducts.mk | head -1)
-            BRAND=$(grep -oP 'PRODUCT_BRAND[[:space:]]*:=\s*\K\S+' AndroidProducts.mk | head -1)
+        # Try to get device name from file
+        if [ -f "device.mk" ]; then
+            DEVICE_NAME=$(grep -E '^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=' device.mk | head -1 | sed 's/.*:=[[:space:]]*//' | xargs)
         fi
         
-        # Method 2: Look in device.mk or similar
+        if [ -z "$DEVICE_NAME" ] && [ -f "AndroidProducts.mk" ]; then
+            DEVICE_NAME=$(grep -E 'PRODUCT_DEVICE' AndroidProducts.mk | head -1 | sed 's/.*:=[[:space:]]*//' | xargs)
+        fi
+        
         if [ -z "$DEVICE_NAME" ]; then
-            for mkfile in *.mk; do
-                if [ -f "$mkfile" ] && [ "$mkfile" != "AndroidProducts.mk" ]; then
-                    DEVICE_NAME=$(grep -E '^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=' "$mkfile" | head -1 | sed 's/.*:=[[:space:]]*//' | xargs)
-                    BRAND=$(grep -E '^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=' "$mkfile" | head -1 | sed 's/.*:=[[:space:]]*//' | xargs)
-                    if [ -n "$DEVICE_NAME" ]; then
-                        if [ -z "$DEVICE_MAKEFILE" ]; then
-                            DEVICE_MAKEFILE=$(basename "$mkfile" .mk)
-                        fi
-                        break
-                    fi
-                fi
-            done
+            DEVICE_NAME="${{ env.DEVICE_NAME_FALLBACK }}"
         fi
         
-        # Fallback: use directory name
-        if [ -z "$DEVICE_NAME" ]; then
-            DEVICE_NAME=$(basename "$(pwd)" | sed 's/device_//' | sed 's/recovery_//' | sed 's/twrp_//')
-            DEVICE_MAKEFILE="$DEVICE_NAME"
-            BRAND="samsung"
-        fi
-        
-        # Set default brand if empty
-        if [ -z "$BRAND" ]; then
-            BRAND="samsung"
-        fi
+        # Clean device name (remove lineage_ prefix if exists)
+        DEVICE_NAME=$(echo "$DEVICE_NAME" | sed 's/^lineage_//')
         
         DEVICE_DIRECTORY="device/$BRAND/$DEVICE_NAME"
         
         echo "Detected: DEVICE_NAME=${DEVICE_NAME}"
-        echo "Detected: DEVICE_MAKEFILE=${DEVICE_MAKEFILE}"
         echo "Detected: DEVICE_DIRECTORY=${DEVICE_DIRECTORY}"
-        echo "Detected: BRAND=${BRAND}"
         
         echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
-        echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> $GITHUB_ENV
         echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
-        echo "BRAND=${BRAND}" >> $GITHUB_ENV
         
         cd ../
         mkdir -p "$DEVICE_DIRECTORY"
         cp -r device_tree/* "$DEVICE_DIRECTORY"/
         rm -rf device_tree
+
+    - name: Fix BoardConfig.mk
+      run: |
+        cd android-recovery
+        
+        BOARD_CONFIG="${{ env.DEVICE_DIRECTORY }}/BoardConfig.mk"
+        
+        if [ -f "$BOARD_CONFIG" ]; then
+            echo "Original BoardConfig.mk:"
+            grep -E "PLATFORM_SECURITY_PATCH|PLATFORM_VERSION|TARGET_RELEASED" "$BOARD_CONFIG" || echo "No problematic lines found"
+            
+            # Comment out readonly variables
+            sed -i 's/^\(PLATFORM_SECURITY_PATCH\s*:=\)/#\1/' "$BOARD_CONFIG"
+            sed -i 's/^\(PLATFORM_VERSION\s*:=\)/#\1/' "$BOARD_CONFIG"
+            sed -i 's/^\(TARGET_RELEASED\s*:=\)/#\1/' "$BOARD_CONFIG"
+            
+            # Add recovery specific flags
+            cat >> "$BOARD_CONFIG" << EOF
+
+# Recovery flags
+TARGET_NO_RECOVERY := true
+BOARD_USES_RECOVERY_AS_BOOT := true
+BOARD_SUPPRESS_SECURE_ERASE := true
+TW_NO_LEGACY_PROPS := true
+EOF
+            echo "BoardConfig.mk fixed"
+        else
+            echo "Warning: BoardConfig.mk not found"
+        fi
+
+    - name: Create Device Makefiles
+      run: |
+        cd android-recovery
+        
+        # Create AndroidProducts.mk
+        cat > "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk" << EOF
+PRODUCT_MAKEFILES := \\
+    \$(LOCAL_DIR)/lineage_${{ env.DEVICE_NAME }}.mk
+EOF
+        
+        # Create lineage_device.mk
+        cat > "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk" << EOF
+# Inherit from device makefile
+\$(call inherit-product, device/${{ env.BRAND }}/${{ env.DEVICE_NAME }}/device.mk)
+
+# Inherit common Lineage stuff
+\$(call inherit-product, vendor/lineage/config/common_full_phone.mk)
+
+# Device identifier
+PRODUCT_NAME := lineage_${{ env.DEVICE_NAME }}
+PRODUCT_DEVICE := ${{ env.DEVICE_NAME }}
+PRODUCT_BRAND := ${{ env.BRAND }}
+PRODUCT_MODEL := ${{ env.DEVICE_NAME }}
+PRODUCT_MANUFACTURER := ${{ env.BRAND }}
+
+PRODUCT_GMS_CLIENTID_BASE := android-${{ env.BRAND }}
+EOF
+        
+        echo "Created makefiles for ${{ env.DEVICE_NAME }}"
+        ls -la "${{ env.DEVICE_DIRECTORY }}/"
 
     - name: Create Roomservice.xml
       run: |
@@ -164,103 +198,53 @@ jobs:
         mkdir -p .repo/local_manifests
         
         cat > .repo/local_manifests/roomservice.xml << EOF
-        <?xml version="1.0" encoding="UTF-8"?>
-        <manifest>
-          <project name="$(echo ${{ inputs.DEVICE_TREE }} | sed 's|https://github.com/||')" path="${{ env.DEVICE_DIRECTORY }}" remote="github" revision="${{ inputs.DEVICE_TREE_BRANCH }}" />
-        </manifest>
-        EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <project name="$(echo ${{ inputs.DEVICE_TREE }} | sed 's|https://github.com/||')" path="${{ env.DEVICE_DIRECTORY }}" remote="github" revision="${{ inputs.DEVICE_TREE_BRANCH }}" />
+</manifest>
+EOF
         
-        echo "Roomservice.xml created:"
-        cat .repo/local_manifests/roomservice.xml
-
-    - name: Fix Device Tree Structure
-      run: |
-        cd android-recovery
-        
-        # Ensure AndroidProducts.mk exists
-        if [ ! -f "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk" ]; then
-            echo "Creating AndroidProducts.mk..."
-            cat > "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk" << EOF
-        PRODUCT_MAKEFILES := \\
-            \$(LOCAL_DIR)/${{ env.DEVICE_MAKEFILE }}.mk
-        EOF
-        fi
-        
-        # Ensure the main device makefile has proper structure
-        MAIN_MK="${{ env.DEVICE_DIRECTORY }}/${{ env.DEVICE_MAKEFILE }}.mk"
-        if [ ! -f "$MAIN_MK" ]; then
-            echo "Looking for existing makefiles..."
-            for mkfile in ${{ env.DEVICE_DIRECTORY }}/*.mk; do
-                if [ -f "$mkfile" ] && [[ ! "$mkfile" =~ "AndroidProducts" ]]; then
-                    echo "Found: $mkfile"
-                    if [ ! -f "$MAIN_MK" ]; then
-                        cp "$mkfile" "$MAIN_MK"
-                        echo "Copied to $MAIN_MK"
-                    fi
-                fi
-            done
-        fi
-        
-        # Display device tree structure for debugging
-        echo "Device tree structure:"
-        ls -la "${{ env.DEVICE_DIRECTORY }}/"
+        echo "Roomservice.xml created"
 
     - name: Build Lineage Recovery
       run: |
         cd android-recovery
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        export WITH_SU=true
         
-        # First try to breakfast (setup device)
-        echo "Trying breakfast for lineage_${{ env.DEVICE_NAME }}..."
-        if breakfast lineage_${{ env.DEVICE_NAME }}; then
-            lunch lineage_${{ env.DEVICE_NAME }}-eng
-        else
-            echo "Breakfast failed, trying with device name only..."
-            if breakfast ${{ env.DEVICE_NAME }}; then
-                lunch ${{ env.DEVICE_NAME }}-eng
-            else
-                echo "Breakfast failed for all attempts!"
-                echo "Checking available devices..."
-                breakfast
-                exit 1
-            fi
-        fi
+        # Add lunch combo
+        add_lunch_combo lineage_${{ env.DEVICE_NAME }}-eng
         
-        # Verify lunch succeeded
-        if [ $? -ne 0 ]; then
-            echo "Lunch failed!"
-            exit 1
-        fi
+        # Set lunch
+        lunch lineage_${{ env.DEVICE_NAME }}-eng
         
-        # Build recovery
+        # Build
         make clean
-        make ${{ inputs.BUILD_TARGET }}image -j$(nproc --all)
+        make recoveryimage -j$(nproc --all)
 
     - name: Set Build Date
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d_%H%M%S)" >> $GITHUB_ENV
 
-    - name: Find and Upload Recovery
+    - name: Find Recovery Image
       run: |
         cd android-recovery
         
-        # Try to find the recovery image
-        RECOVERY_PATH=""
-        if [ -f "out/target/product/${{ env.DEVICE_NAME }}/recovery.img" ]; then
-            RECOVERY_PATH="out/target/product/${{ env.DEVICE_NAME }}/recovery.img"
-        elif [ -f "out/target/product/${{ env.DEVICE_NAME }}/${{ inputs.BUILD_TARGET }}.img" ]; then
-            RECOVERY_PATH="out/target/product/${{ env.DEVICE_NAME }}/${{ inputs.BUILD_TARGET }}.img"
-        else
-            echo "Looking for recovery image..."
-            find out/target -name "*.img" -type f
+        # Find recovery image
+        RECOVERY_PATH=$(find out/target/product/${{ env.DEVICE_NAME }} -name "recovery.img" -type f 2>/dev/null | head -1)
+        
+        if [ -z "$RECOVERY_PATH" ]; then
+            RECOVERY_PATH=$(find out/target/product -name "recovery.img" -type f 2>/dev/null | head -1)
         fi
         
-        echo "RECOVERY_PATH=${RECOVERY_PATH}" >> $GITHUB_ENV
-        
-        if [ -z "$RECOVERY_PATH" ] || [ ! -f "$RECOVERY_PATH" ]; then
-            echo "Recovery image not found!"
+        if [ -n "$RECOVERY_PATH" ] && [ -f "$RECOVERY_PATH" ]; then
+            echo "RECOVERY_PATH=${RECOVERY_PATH}" >> $GITHUB_ENV
+            echo "Found recovery at: ${RECOVERY_PATH}"
+            ls -lh "$RECOVERY_PATH"
+        else
+            echo "ERROR: Recovery image not found!"
+            echo "Build output contents:"
+            find out/target -type f -name "*.img" 2>/dev/null || echo "No img files found"
             exit 1
         fi
 
@@ -269,20 +253,20 @@ jobs:
       with:
         files: |
           android-recovery/${{ env.RECOVERY_PATH }}
-        name: Unofficial Lineage Recovery for ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
-        tag_name: ${{ github.run_id }}
+        name: Lineage Recovery for ${{ env.DEVICE_NAME }} [${{ env.BUILD_DATE }}]
+        tag_name: recovery_${{ github.run_id }}
         body: |
-          **Build Information:**
-          - Manifest Branch: ${{ inputs.MANIFEST_BRANCH }}
-          - Device: ${{ env.DEVICE_NAME }}
-          - Brand: ${{ env.BRAND }}
-          - Build Date: ${{ env.BUILD_DATE }}
+          ## Lineage Recovery Build
           
-          **Sources:**
-          - Device Tree: [${{ inputs.DEVICE_TREE }}](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
-          - Commit: [${{ env.COMMIT_ID }}](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }})
+          **Device:** ${{ env.DEVICE_NAME }}
+          **Branch:** ${{ inputs.MANIFEST_BRANCH }}
+          **Build Date:** ${{ env.BUILD_DATE }}
           
-          **Notes:**
-          - This is an unofficial build
-          - Use at your own risk
-          - Make sure to backup your data before flashing
+          **Source Code:**
+          - Device Tree: [${{ inputs.DEVICE_TREE }}](${{ inputs.DEVICE_TREE }})
+          - Branch: ${{ inputs.DEVICE_TREE_BRANCH }}
+          - Commit: `${{ env.COMMIT_ID }}`
+          
+          **Installation:**
+          ```bash
+          fastboot flash recovery recovery.img
