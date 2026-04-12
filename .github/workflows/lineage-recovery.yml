@@ -95,39 +95,34 @@ jobs:
     - name: Setup Device Tree
       run: |
         cd android-recovery/device_tree
+        
+        # Detect device information from makefiles
         DEVICE_MAKEFILE=""
         DEVICE_DIRECTORY=""
         DEVICE_NAME=""
+        BRAND=""
         
-        # Look for AndroidProducts.mk or similar makefiles
+        # Method 1: Look for AndroidProducts.mk
         if [ -f "AndroidProducts.mk" ]; then
-            # Extract device name from AndroidProducts.mk
+            # Get the main makefile from AndroidProducts.mk
+            MAIN_MAKEFILE=$(grep -E 'PRODUCT_MAKEFILES\s*:=' AndroidProducts.mk | head -1 | sed 's/.*:=\s*//' | sed 's/)\s*$//' | xargs | cut -d' ' -f1)
+            if [ -n "$MAIN_MAKEFILE" ]; then
+                DEVICE_MAKEFILE=$(basename "$MAIN_MAKEFILE" .mk)
+            fi
             DEVICE_NAME=$(grep -oP 'PRODUCT_DEVICE[[:space:]]*:=\s*\K\S+' AndroidProducts.mk | head -1)
             BRAND=$(grep -oP 'PRODUCT_BRAND[[:space:]]*:=\s*\K\S+' AndroidProducts.mk | head -1)
-            
-            if [ -n "$DEVICE_NAME" ]; then
-                DEVICE_MAKEFILE="$DEVICE_NAME"
-                DEVICE_DIRECTORY="device/${BRAND:-$DEVICE_NAME}"
-                echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> $GITHUB_ENV
-                echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
-                echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
-            fi
         fi
         
-        # Alternative: look for device.mk or similar
+        # Method 2: Look in device.mk or similar
         if [ -z "$DEVICE_NAME" ]; then
             for mkfile in *.mk; do
-                if [ -f "$mkfile" ]; then
-                    # Extract using grep with simpler pattern
+                if [ -f "$mkfile" ] && [ "$mkfile" != "AndroidProducts.mk" ]; then
                     DEVICE_NAME=$(grep -E '^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=' "$mkfile" | head -1 | sed 's/.*:=[[:space:]]*//' | xargs)
                     BRAND=$(grep -E '^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=' "$mkfile" | head -1 | sed 's/.*:=[[:space:]]*//' | xargs)
-                    
                     if [ -n "$DEVICE_NAME" ]; then
-                        DEVICE_MAKEFILE="$DEVICE_NAME"
-                        DEVICE_DIRECTORY="device/${BRAND:-$DEVICE_NAME}"
-                        echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> $GITHUB_ENV
-                        echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
-                        echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
+                        if [ -z "$DEVICE_MAKEFILE" ]; then
+                            DEVICE_MAKEFILE=$(basename "$mkfile" .mk)
+                        fi
                         break
                     fi
                 fi
@@ -136,26 +131,93 @@ jobs:
         
         # Fallback: use directory name
         if [ -z "$DEVICE_NAME" ]; then
-            DEVICE_NAME=$(basename "$(pwd)")
+            DEVICE_NAME=$(basename "$(pwd)" | sed 's/device_//' | sed 's/recovery_//')
             DEVICE_MAKEFILE="$DEVICE_NAME"
-            DEVICE_DIRECTORY="device/$DEVICE_NAME"
-            echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> $GITHUB_ENV
-            echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
-            echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
+            BRAND="samsung"
         fi
         
-        echo "Detected: DEVICE_NAME=${DEVICE_NAME}, DEVICE_DIRECTORY=${DEVICE_DIRECTORY}"
+        # Set default brand if empty
+        if [ -z "$BRAND" ]; then
+            BRAND="samsung"
+        fi
+        
+        DEVICE_DIRECTORY="device/$BRAND/$DEVICE_NAME"
+        
+        echo "Detected: DEVICE_NAME=${DEVICE_NAME}"
+        echo "Detected: DEVICE_MAKEFILE=${DEVICE_MAKEFILE}"
+        echo "Detected: DEVICE_DIRECTORY=${DEVICE_DIRECTORY}"
+        echo "Detected: BRAND=${BRAND}"
+        
+        echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
+        echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> $GITHUB_ENV
+        echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
+        echo "BRAND=${BRAND}" >> $GITHUB_ENV
         
         cd ../
         mkdir -p "$DEVICE_DIRECTORY"
-        mv device_tree "$DEVICE_DIRECTORY"/"$DEVICE_NAME"
+        mv device_tree/* "$DEVICE_DIRECTORY"/
+        rm -rf device_tree
+
+    - name: Create Roomservice.xml
+      run: |
+        cd android-recovery
+        mkdir -p .repo/local_manifests
+        
+        cat > .repo/local_manifests/roomservice.xml << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <manifest>
+          <project name="$(echo ${{ inputs.DEVICE_TREE }} | sed 's|https://github.com/||')" path="${{ env.DEVICE_DIRECTORY }}" remote="github" revision="${{ inputs.DEVICE_TREE_BRANCH }}" />
+        </manifest>
+        EOF
+        
+        echo "Roomservice.xml created:"
+        cat .repo/local_manifests/roomservice.xml
+
+    - name: Fix Dependencies
+      run: |
+        cd android-recovery
+        
+        # Check if device needs additional dependencies
+        if [ -f "${{ env.DEVICE_DIRECTORY }}/lineage.dependencies" ]; then
+          echo "Found lineage.dependencies, will sync dependencies..."
+          # Parse dependencies if needed
+        fi
+        
+        # Create a dummy device configuration if missing
+        if [ ! -f "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk" ]; then
+          echo "Creating AndroidProducts.mk..."
+          cat > "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk" << EOF
+        PRODUCT_MAKEFILES := \\
+            \$(LOCAL_DIR)/${{ env.DEVICE_MAKEFILE }}.mk
+        EOF
+        fi
+        
+        # Ensure the main device makefile exists
+        if [ ! -f "${{ env.DEVICE_DIRECTORY }}/${{ env.DEVICE_MAKEFILE }}.mk" ]; then
+          echo "WARNING: Main device makefile not found!"
+          echo "Looking for available .mk files..."
+          ls -la "${{ env.DEVICE_DIRECTORY }}/"
+        fi
 
     - name: Build Lineage Recovery
       run: |
         cd android-recovery
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        lunch ${{ env.DEVICE_MAKEFILE }}-eng
+        export WITH_SU=true
+        
+        # Try to lunch with full device name
+        if ! lunch lineage_${{ env.DEVICE_NAME }}-eng 2>/dev/null; then
+            if ! lunch ${{ env.DEVICE_NAME }}-eng 2>/dev/null; then
+                if ! lunch ${{ env.DEVICE_MAKEFILE }}-eng 2>/dev/null; then
+                    echo "All lunch attempts failed!"
+                    echo "Available lunch targets:"
+                    lunch
+                    exit 1
+                fi
+            fi
+        fi
+        
         make clean
         make ${{ inputs.BUILD_TARGET }}image -j$(nproc --all)
 
@@ -174,3 +236,8 @@ jobs:
           Manifest: ${{ inputs.MANIFEST_BRANCH }}
           Tree: [Device Tree](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
           Commit: [${{ env.COMMIT_ID }}](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }})
+          
+          **Device Information:**
+          - Device: ${{ env.DEVICE_NAME }}
+          - Brand: ${{ env.BRAND }}
+          - Makefile: ${{ env.DEVICE_MAKEFILE }}
