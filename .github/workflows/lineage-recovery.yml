@@ -97,109 +97,51 @@ jobs:
     - name: Setup Device Tree
       run: |
         cd android-recovery
-        
-        DEVICE_NAME="a22x"
-        BRAND="samsung"
-        DEVICE_DIRECTORY="device/$BRAND/$DEVICE_NAME"
-        
-        echo "Using DEVICE_NAME=${DEVICE_NAME}"
-        echo "Using DEVICE_DIRECTORY=${DEVICE_DIRECTORY}"
-        
-        mkdir -p "$DEVICE_DIRECTORY"
-        cp -r device_tree/* "$DEVICE_DIRECTORY"/
+        mkdir -p device/samsung/a22x
+        cp -r device_tree/* device/samsung/a22x/
         rm -rf device_tree
 
     - name: Fix BoardConfig.mk
       run: |
         cd android-recovery
-        
-        BOARD_CONFIG="device/samsung/a22x/BoardConfig.mk"
-        
-        if [ -f "$BOARD_CONFIG" ]; then
-            echo "Fixing BoardConfig.mk..."
-            sed -i 's/^PLATFORM_SECURITY_PATCH/#PLATFORM_SECURITY_PATCH/g' "$BOARD_CONFIG"
-            sed -i 's/^PLATFORM_VERSION/#PLATFORM_VERSION/g' "$BOARD_CONFIG"
-            sed -i 's/^TARGET_RELEASED/#TARGET_RELEASED/g' "$BOARD_CONFIG"
-            
-            if ! grep -q "TARGET_NO_RECOVERY" "$BOARD_CONFIG"; then
-                echo "" >> "$BOARD_CONFIG"
-                echo "# Recovery flags" >> "$BOARD_CONFIG"
-                echo "TARGET_NO_RECOVERY := true" >> "$BOARD_CONFIG"
-                echo "BOARD_USES_RECOVERY_AS_BOOT := true" >> "$BOARD_CONFIG"
-                echo "BOARD_SUPPRESS_SECURE_ERASE := true" >> "$BOARD_CONFIG"
-            fi
-            
-            echo "BoardConfig.mk fixed"
-        fi
+        sed -i 's/^PLATFORM_SECURITY_PATCH/#PLATFORM_SECURITY_PATCH/g' device/samsung/a22x/BoardConfig.mk || true
+        sed -i 's/^PLATFORM_VERSION/#PLATFORM_VERSION/g' device/samsung/a22x/BoardConfig.mk || true
+        sed -i 's/^TARGET_RELEASED/#TARGET_RELEASED/g' device/samsung/a22x/BoardConfig.mk || true
+        echo "" >> device/samsung/a22x/BoardConfig.mk
+        echo "# Recovery flags" >> device/samsung/a22x/BoardConfig.mk
+        echo "TARGET_NO_RECOVERY := true" >> device/samsung/a22x/BoardConfig.mk
+        echo "BOARD_USES_RECOVERY_AS_BOOT := true" >> device/samsung/a22x/BoardConfig.mk
 
     - name: Update AndroidProducts.mk
       run: |
         cd android-recovery
-        
-        ANDROID_PRODUCTS="device/samsung/a22x/AndroidProducts.mk"
-        
-        cat > "$ANDROID_PRODUCTS" << EOF
-#
-# Copyright (C) 2020 The Android Open Source Project
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-
-PRODUCT_MAKEFILES := \\
-    \$(LOCAL_DIR)/lineage_a22x.mk
-
-COMMON_LUNCH_CHOICES := \\
-    lineage_a22x-user \\
-    lineage_a22x-userdebug \\
-    lineage_a22x-eng
-EOF
-        
-        echo "Updated AndroidProducts.mk"
+        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/lineage_a22x.mk" > device/samsung/a22x/AndroidProducts.mk
+        echo "COMMON_LUNCH_CHOICES := lineage_a22x-user lineage_a22x-userdebug lineage_a22x-eng" >> device/samsung/a22x/AndroidProducts.mk
 
     - name: Create lineage_a22x.mk
       run: |
         cd android-recovery
-        
-        DEVICE_MK="device/samsung/a22x/lineage_a22x.mk"
-        
-        cat > "$DEVICE_MK" << EOF
-# Inherit from device makefile
-\$(call inherit-product, device/samsung/a22x/device.mk)
-
-# Inherit common Lineage stuff
-\$(call inherit-product, vendor/lineage/config/common_full_phone.mk)
-
-# Device identifier
-PRODUCT_NAME := lineage_a22x
-PRODUCT_DEVICE := a22x
-PRODUCT_BRAND := samsung
-PRODUCT_MODEL := SM-A226B
-PRODUCT_MANUFACTURER := samsung
-
-PRODUCT_GMS_CLIENTID_BASE := android-samsung
-EOF
-        
-        echo "Created lineage_a22x.mk"
+        echo "# Inherit from device makefile" > device/samsung/a22x/lineage_a22x.mk
+        echo "\$(call inherit-product, device/samsung/a22x/device.mk)" >> device/samsung/a22x/lineage_a22x.mk
+        echo "" >> device/samsung/a22x/lineage_a22x.mk
+        echo "# Inherit common Lineage stuff" >> device/samsung/a22x/lineage_a22x.mk
+        echo "\$(call inherit-product, vendor/lineage/config/common_full_phone.mk)" >> device/samsung/a22x/lineage_a22x.mk
+        echo "" >> device/samsung/a22x/lineage_a22x.mk
+        echo "# Device identifier" >> device/samsung/a22x/lineage_a22x.mk
+        echo "PRODUCT_NAME := lineage_a22x" >> device/samsung/a22x/lineage_a22x.mk
+        echo "PRODUCT_DEVICE := a22x" >> device/samsung/a22x/lineage_a22x.mk
+        echo "PRODUCT_BRAND := samsung" >> device/samsung/a22x/lineage_a22x.mk
+        echo "PRODUCT_MODEL := SM-A226B" >> device/samsung/a22x/lineage_a22x.mk
+        echo "PRODUCT_MANUFACTURER := samsung" >> device/samsung/a22x/lineage_a22x.mk
+        echo "" >> device/samsung/a22x/lineage_a22x.mk
+        echo "PRODUCT_GMS_CLIENTID_BASE := android-samsung" >> device/samsung/a22x/lineage_a22x.mk
 
     - name: Build Lineage Recovery
       run: |
         cd android-recovery
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        
-        echo "Building for lineage_a22x-eng"
         lunch lineage_a22x-eng
-        
         make clean
         make recoveryimage -j$(nproc --all)
 
@@ -210,24 +152,13 @@ EOF
     - name: Find Recovery Image
       run: |
         cd android-recovery
-        
-        RECOVERY_PATH=""
         if [ -f "out/target/product/a22x/recovery.img" ]; then
-            RECOVERY_PATH="out/target/product/a22x/recovery.img"
-        elif [ -f "out/target/product/samsung_a22/recovery.img" ]; then
-            RECOVERY_PATH="out/target/product/samsung_a22/recovery.img"
+          echo "RECOVERY_PATH=out/target/product/a22x/recovery.img" >> $GITHUB_ENV
+          ls -lh out/target/product/a22x/recovery.img
         else
-            RECOVERY_PATH=$(find out/target/product -name "recovery.img" -type f 2>/dev/null | head -1)
-        fi
-        
-        if [ -n "$RECOVERY_PATH" ] && [ -f "$RECOVERY_PATH" ]; then
-            echo "RECOVERY_PATH=${RECOVERY_PATH}" >> $GITHUB_ENV
-            echo "Found recovery at: ${RECOVERY_PATH}"
-            ls -lh "$RECOVERY_PATH"
-        else
-            echo "ERROR: Recovery image not found!"
-            find out/target -name "*.img" -type f 2>/dev/null || echo "No img files found"
-            exit 1
+          echo "ERROR: Recovery image not found!"
+          find out/target -name "*.img" 2>/dev/null || echo "No img files"
+          exit 1
         fi
 
     - name: Upload to Release
@@ -238,18 +169,12 @@ EOF
         name: Lineage Recovery for Samsung A22x (${{ env.BUILD_DATE }})
         tag_name: recovery_a22x_${{ github.run_id }}
         body: |
-          ## Lineage Recovery for Samsung Galaxy A22 5G
+          Lineage Recovery for Samsung Galaxy A22 5G
           
-          **Device:** Samsung Galaxy A22 5G (a22x)
-          **Branch:** ${{ inputs.MANIFEST_BRANCH }}
-          **Build Date:** ${{ env.BUILD_DATE }}
+          Device: Samsung Galaxy A22 5G (a22x)
+          Branch: ${{ inputs.MANIFEST_BRANCH }}
+          Build Date: ${{ env.BUILD_DATE }}
           
-          **Source Code:**
-          - Device Tree: [${{ inputs.DEVICE_TREE }}](${{ inputs.DEVICE_TREE }})
-          - Branch: ${{ inputs.DEVICE_TREE_BRANCH }}
-          - Commit: ${{ env.COMMIT_ID }}
+          Installation: fastboot flash recovery recovery.img
           
-          **Installation:**
-          fastboot flash recovery recovery.img
-          
-          **Note:** Unofficial build - Use at your own risk
+          Note: Unofficial build - Use at your own risk
