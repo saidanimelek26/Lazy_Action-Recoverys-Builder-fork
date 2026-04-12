@@ -91,7 +91,6 @@ jobs:
         git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./device_tree
         cd device_tree
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
-        # Extract device name from folder or files
         DEVICE_NAME_FALLBACK=$(basename "${{ inputs.DEVICE_TREE }}" | sed 's/twrp_device_//' | sed 's/recovery_device_//' | sed 's/device_//')
         echo "DEVICE_NAME_FALLBACK=${DEVICE_NAME_FALLBACK}" >> $GITHUB_ENV
 
@@ -99,11 +98,9 @@ jobs:
       run: |
         cd android-recovery/device_tree
         
-        # Detect device information
         DEVICE_NAME=""
         BRAND="samsung"
         
-        # Try to get device name from file
         if [ -f "device.mk" ]; then
             DEVICE_NAME=$(grep -E '^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=' device.mk | head -1 | sed 's/.*:=[[:space:]]*//' | xargs)
         fi
@@ -116,9 +113,7 @@ jobs:
             DEVICE_NAME="${{ env.DEVICE_NAME_FALLBACK }}"
         fi
         
-        # Clean device name (remove lineage_ prefix if exists)
         DEVICE_NAME=$(echo "$DEVICE_NAME" | sed 's/^lineage_//')
-        
         DEVICE_DIRECTORY="device/$BRAND/$DEVICE_NAME"
         
         echo "Detected: DEVICE_NAME=${DEVICE_NAME}"
@@ -126,6 +121,7 @@ jobs:
         
         echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
         echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
+        echo "BRAND=${BRAND}" >> $GITHUB_ENV
         
         cd ../
         mkdir -p "$DEVICE_DIRECTORY"
@@ -142,13 +138,11 @@ jobs:
             echo "Original BoardConfig.mk:"
             grep -E "PLATFORM_SECURITY_PATCH|PLATFORM_VERSION|TARGET_RELEASED" "$BOARD_CONFIG" || echo "No problematic lines found"
             
-            # Comment out readonly variables
-            sed -i 's/^\(PLATFORM_SECURITY_PATCH\s*:=\)/#\1/' "$BOARD_CONFIG"
+            sed -i 's/^\(PLATFORM_SECURITY_PATH\s*:=\)/#\1/' "$BOARD_CONFIG"
             sed -i 's/^\(PLATFORM_VERSION\s*:=\)/#\1/' "$BOARD_CONFIG"
             sed -i 's/^\(TARGET_RELEASED\s*:=\)/#\1/' "$BOARD_CONFIG"
             
-            # Add recovery specific flags
-            cat >> "$BOARD_CONFIG" << EOF
+            cat >> "$BOARD_CONFIG" << 'EOF'
 
 # Recovery flags
 TARGET_NO_RECOVERY := true
@@ -165,13 +159,11 @@ EOF
       run: |
         cd android-recovery
         
-        # Create AndroidProducts.mk
         cat > "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk" << EOF
 PRODUCT_MAKEFILES := \\
     \$(LOCAL_DIR)/lineage_${{ env.DEVICE_NAME }}.mk
 EOF
         
-        # Create lineage_device.mk
         cat > "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk" << EOF
 # Inherit from device makefile
 \$(call inherit-product, device/${{ env.BRAND }}/${{ env.DEVICE_NAME }}/device.mk)
@@ -197,14 +189,17 @@ EOF
         cd android-recovery
         mkdir -p .repo/local_manifests
         
+        REPO_NAME=$(echo "${{ inputs.DEVICE_TREE }}" | sed 's|https://github.com/||')
+        
         cat > .repo/local_manifests/roomservice.xml << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
-  <project name="$(echo ${{ inputs.DEVICE_TREE }} | sed 's|https://github.com/||')" path="${{ env.DEVICE_DIRECTORY }}" remote="github" revision="${{ inputs.DEVICE_TREE_BRANCH }}" />
+  <project name="${REPO_NAME}" path="${{ env.DEVICE_DIRECTORY }}" remote="github" revision="${{ inputs.DEVICE_TREE_BRANCH }}" />
 </manifest>
 EOF
         
         echo "Roomservice.xml created"
+        cat .repo/local_manifests/roomservice.xml
 
     - name: Build Lineage Recovery
       run: |
@@ -212,13 +207,9 @@ EOF
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         
-        # Add lunch combo
         add_lunch_combo lineage_${{ env.DEVICE_NAME }}-eng
-        
-        # Set lunch
         lunch lineage_${{ env.DEVICE_NAME }}-eng
         
-        # Build
         make clean
         make recoveryimage -j$(nproc --all)
 
@@ -230,7 +221,6 @@ EOF
       run: |
         cd android-recovery
         
-        # Find recovery image
         RECOVERY_PATH=$(find out/target/product/${{ env.DEVICE_NAME }} -name "recovery.img" -type f 2>/dev/null | head -1)
         
         if [ -z "$RECOVERY_PATH" ]; then
@@ -268,5 +258,3 @@ EOF
           - Commit: `${{ env.COMMIT_ID }}`
           
           **Installation:**
-          ```bash
-          fastboot flash recovery recovery.img
