@@ -91,106 +91,122 @@ jobs:
         git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./device_tree
         cd device_tree
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
-        DEVICE_NAME_FALLBACK=$(basename "${{ inputs.DEVICE_TREE }}" | sed 's/twrp_device_//' | sed 's/recovery_device_//' | sed 's/device_//')
-        echo "DEVICE_NAME_FALLBACK=${DEVICE_NAME_FALLBACK}" >> $GITHUB_ENV
+        # Force device name to a22x based on your file
+        echo "DEVICE_NAME=a22x" >> $GITHUB_ENV
+        echo "BRAND=samsung" >> $GITHUB_ENV
 
     - name: Setup Device Tree
       run: |
-        cd android-recovery/device_tree
+        cd android-recovery
         
-        DEVICE_NAME=""
+        DEVICE_NAME="a22x"
         BRAND="samsung"
-        
-        if [ -f "device.mk" ]; then
-            DEVICE_NAME=$(grep -E '^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=' device.mk | head -1 | sed 's/.*:=[[:space:]]*//' | xargs)
-        fi
-        
-        if [ -z "$DEVICE_NAME" ] && [ -f "AndroidProducts.mk" ]; then
-            DEVICE_NAME=$(grep -E 'PRODUCT_DEVICE' AndroidProducts.mk | head -1 | sed 's/.*:=[[:space:]]*//' | xargs)
-        fi
-        
-        if [ -z "$DEVICE_NAME" ]; then
-            DEVICE_NAME="${{ env.DEVICE_NAME_FALLBACK }}"
-        fi
-        
-        DEVICE_NAME=$(echo "$DEVICE_NAME" | sed 's/^lineage_//')
         DEVICE_DIRECTORY="device/$BRAND/$DEVICE_NAME"
         
-        echo "Detected: DEVICE_NAME=${DEVICE_NAME}"
-        echo "Detected: DEVICE_DIRECTORY=${DEVICE_DIRECTORY}"
+        echo "Using DEVICE_NAME=${DEVICE_NAME}"
+        echo "Using DEVICE_DIRECTORY=${DEVICE_DIRECTORY}"
         
-        echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
-        echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
-        echo "BRAND=${BRAND}" >> $GITHUB_ENV
-        
-        cd ../
         mkdir -p "$DEVICE_DIRECTORY"
         cp -r device_tree/* "$DEVICE_DIRECTORY"/
         rm -rf device_tree
+        
+        # Keep the original AndroidProducts.mk from the device tree if it exists
+        if [ -f "$DEVICE_DIRECTORY/AndroidProducts.mk" ]; then
+            echo "Keeping original AndroidProducts.mk"
+            cat "$DEVICE_DIRECTORY/AndroidProducts.mk"
+        fi
 
     - name: Fix BoardConfig.mk
       run: |
         cd android-recovery
         
-        BOARD_CONFIG="${{ env.DEVICE_DIRECTORY }}/BoardConfig.mk"
+        BOARD_CONFIG="device/samsung/a22x/BoardConfig.mk"
         
         if [ -f "$BOARD_CONFIG" ]; then
             echo "Fixing BoardConfig.mk..."
+            # Comment out readonly variables
             sed -i 's/^PLATFORM_SECURITY_PATCH/#PLATFORM_SECURITY_PATCH/g' "$BOARD_CONFIG"
             sed -i 's/^PLATFORM_VERSION/#PLATFORM_VERSION/g' "$BOARD_CONFIG"
             sed -i 's/^TARGET_RELEASED/#TARGET_RELEASED/g' "$BOARD_CONFIG"
             
-            echo "" >> "$BOARD_CONFIG"
-            echo "# Recovery flags" >> "$BOARD_CONFIG"
-            echo "TARGET_NO_RECOVERY := true" >> "$BOARD_CONFIG"
-            echo "BOARD_USES_RECOVERY_AS_BOOT := true" >> "$BOARD_CONFIG"
-            echo "BOARD_SUPPRESS_SECURE_ERASE := true" >> "$BOARD_CONFIG"
-            echo "TW_NO_LEGACY_PROPS := true" >> "$BOARD_CONFIG"
+            # Add recovery flags if not present
+            if ! grep -q "TARGET_NO_RECOVERY" "$BOARD_CONFIG"; then
+                echo "" >> "$BOARD_CONFIG"
+                echo "# Recovery flags" >> "$BOARD_CONFIG"
+                echo "TARGET_NO_RECOVERY := true" >> "$BOARD_CONFIG"
+                echo "BOARD_USES_RECOVERY_AS_BOOT := true" >> "$BOARD_CONFIG"
+                echo "BOARD_SUPPRESS_SECURE_ERASE := true" >> "$BOARD_CONFIG"
+            fi
             
             echo "BoardConfig.mk fixed"
         else
-            echo "Warning: BoardConfig.mk not found"
+            echo "Warning: BoardConfig.mk not found at $BOARD_CONFIG"
         fi
 
-    - name: Create Device Makefiles
+    - name: Update AndroidProducts.mk
       run: |
         cd android-recovery
         
-        echo "PRODUCT_MAKEFILES := \\" > "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk"
-        echo "    \$(LOCAL_DIR)/lineage_${{ env.DEVICE_NAME }}.mk" >> "${{ env.DEVICE_DIRECTORY }}/AndroidProducts.mk"
+        ANDROID_PRODUCTS="device/samsung/a22x/AndroidProducts.mk"
         
-        echo "# Inherit from device makefile" > "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "\$(call inherit-product, device/${{ env.BRAND }}/${{ env.DEVICE_NAME }}/device.mk)" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "# Inherit common Lineage stuff" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "\$(call inherit-product, vendor/lineage/config/common_full_phone.mk)" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "# Device identifier" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "PRODUCT_NAME := lineage_${{ env.DEVICE_NAME }}" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "PRODUCT_DEVICE := ${{ env.DEVICE_NAME }}" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "PRODUCT_BRAND := ${{ env.BRAND }}" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "PRODUCT_MODEL := ${{ env.DEVICE_NAME }}" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "PRODUCT_MANUFACTURER := ${{ env.BRAND }}" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        echo "PRODUCT_GMS_CLIENTID_BASE := android-${{ env.BRAND }}" >> "${{ env.DEVICE_DIRECTORY }}/lineage_${{ env.DEVICE_NAME }}.mk"
-        
-        echo "Created makefiles for ${{ env.DEVICE_NAME }}"
-        ls -la "${{ env.DEVICE_DIRECTORY }}/"
+        # Update AndroidProducts.mk with correct format
+        cat > "$ANDROID_PRODUCTS" << 'EOF'
+#
+# Copyright (C) 2020 The Android Open Source Project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 
-    - name: Create Roomservice.xml
+PRODUCT_MAKEFILES := \
+    $(LOCAL_DIR)/lineage_a22x.mk
+
+COMMON_LUNCH_CHOICES := \
+    lineage_a22x-user \
+    lineage_a22x-userdebug \
+    lineage_a22x-eng
+EOF
+        
+        echo "Updated AndroidProducts.mk"
+        cat "$ANDROID_PRODUCTS"
+
+    - name: Create lineage_a22x.mk if missing
       run: |
         cd android-recovery
-        mkdir -p .repo/local_manifests
         
-        REPO_NAME=$(echo "${{ inputs.DEVICE_TREE }}" | sed 's|https://github.com/||')
+        DEVICE_MK="device/samsung/a22x/lineage_a22x.mk"
         
-        echo '<?xml version="1.0" encoding="UTF-8"?>' > .repo/local_manifests/roomservice.xml
-        echo '<manifest>' >> .repo/local_manifests/roomservice.xml
-        echo "  <project name=\"${REPO_NAME}\" path=\"${{ env.DEVICE_DIRECTORY }}\" remote=\"github\" revision=\"${{ inputs.DEVICE_TREE_BRANCH }}\" />" >> .repo/local_manifests/roomservice.xml
-        echo '</manifest>' >> .repo/local_manifests/roomservice.xml
-        
-        echo "Roomservice.xml created"
-        cat .repo/local_manifests/roomservice.xml
+        if [ ! -f "$DEVICE_MK" ]; then
+            echo "Creating lineage_a22x.mk..."
+            cat > "$DEVICE_MK" << 'EOF'
+# Inherit from device makefile
+$(call inherit-product, device/samsung/a22x/device.mk)
+
+# Inherit common Lineage stuff
+$(call inherit-product, vendor/lineage/config/common_full_phone.mk)
+
+# Device identifier
+PRODUCT_NAME := lineage_a22x
+PRODUCT_DEVICE := a22x
+PRODUCT_BRAND := samsung
+PRODUCT_MODEL := SM-A226B
+PRODUCT_MANUFACTURER := samsung
+
+PRODUCT_GMS_CLIENTID_BASE := android-samsung
+EOF
+            echo "Created lineage_a22x.mk"
+        else
+            echo "lineage_a22x.mk already exists"
+        fi
 
     - name: Build Lineage Recovery
       run: |
@@ -198,9 +214,15 @@ jobs:
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         
-        add_lunch_combo lineage_${{ env.DEVICE_NAME }}-eng
-        lunch lineage_${{ env.DEVICE_NAME }}-eng
+        # List available lunch targets for debugging
+        echo "Available lunch targets:"
+        lunch
         
+        # Directly lunch with the correct target
+        echo "Building for lineage_a22x-eng"
+        lunch lineage_a22x-eng
+        
+        # Build recovery
         make clean
         make recoveryimage -j$(nproc --all)
 
@@ -212,9 +234,12 @@ jobs:
       run: |
         cd android-recovery
         
-        RECOVERY_PATH=$(find out/target/product/${{ env.DEVICE_NAME }} -name "recovery.img" -type f 2>/dev/null | head -1)
-        
-        if [ -z "$RECOVERY_PATH" ]; then
+        RECOVERY_PATH=""
+        if [ -f "out/target/product/a22x/recovery.img" ]; then
+            RECOVERY_PATH="out/target/product/a22x/recovery.img"
+        elif [ -f "out/target/product/samsung_a22/recovery.img" ]; then
+            RECOVERY_PATH="out/target/product/samsung_a22/recovery.img"
+        else
             RECOVERY_PATH=$(find out/target/product -name "recovery.img" -type f 2>/dev/null | head -1)
         fi
         
@@ -224,8 +249,8 @@ jobs:
             ls -lh "$RECOVERY_PATH"
         else
             echo "ERROR: Recovery image not found!"
-            echo "Build output contents:"
-            find out/target -type f -name "*.img" 2>/dev/null || echo "No img files found"
+            echo "Searching for any img files:"
+            find out/target -name "*.img" -type f 2>/dev/null || echo "No img files found"
             exit 1
         fi
 
@@ -234,12 +259,12 @@ jobs:
       with:
         files: |
           android-recovery/${{ env.RECOVERY_PATH }}
-        name: Lineage Recovery for ${{ env.DEVICE_NAME }} [${{ env.BUILD_DATE }}]
-        tag_name: recovery_${{ github.run_id }}
+        name: Lineage Recovery for Samsung A22x (${{ env.BUILD_DATE }})
+        tag_name: recovery_a22x_${{ github.run_id }}
         body: |
-          ## Lineage Recovery Build
+          ## Lineage Recovery for Samsung Galaxy A22 5G
           
-          **Device:** ${{ env.DEVICE_NAME }}
+          **Device:** Samsung Galaxy A22 5G (a22x)
           **Branch:** ${{ inputs.MANIFEST_BRANCH }}
           **Build Date:** ${{ env.BUILD_DATE }}
           
@@ -249,3 +274,5 @@ jobs:
           - Commit: `${{ env.COMMIT_ID }}`
           
           **Installation:**
+          ```bash
+          fastboot flash recovery recovery.img
