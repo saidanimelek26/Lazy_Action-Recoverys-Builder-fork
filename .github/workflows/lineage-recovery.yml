@@ -98,20 +98,54 @@ jobs:
         DEVICE_MAKEFILE=""
         DEVICE_DIRECTORY=""
         DEVICE_NAME=""
-        for file in *.mk; do
-            makefile=$(sed -n 's/^[[:space:]]*PRODUCT_NAME[[:space:]]*:=\s*.*/\1/p' "$file")
-            brand=$(sed -n 's/^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=\s*.*/\1/p' "$file")
-            codename=$(sed -n 's/^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=\s*.*/\1/p' "$file")
-            if [[ -n "$makefile" && -n "$brand" && -n "$codename" ]]; then
-                DEVICE_MAKEFILE="$makefile"
-                DEVICE_DIRECTORY="device/$brand"
-                DEVICE_NAME="$codename"
+        
+        # Look for AndroidProducts.mk or similar makefiles
+        if [ -f "AndroidProducts.mk" ]; then
+            # Extract device name from AndroidProducts.mk
+            DEVICE_NAME=$(grep -oP 'PRODUCT_DEVICE[[:space:]]*:=\s*\K\S+' AndroidProducts.mk | head -1)
+            BRAND=$(grep -oP 'PRODUCT_BRAND[[:space:]]*:=\s*\K\S+' AndroidProducts.mk | head -1)
+            
+            if [ -n "$DEVICE_NAME" ]; then
+                DEVICE_MAKEFILE="$DEVICE_NAME"
+                DEVICE_DIRECTORY="device/${BRAND:-$DEVICE_NAME}"
                 echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> $GITHUB_ENV
                 echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
                 echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
-                break
             fi
-        done
+        fi
+        
+        # Alternative: look for device.mk or similar
+        if [ -z "$DEVICE_NAME" ]; then
+            for mkfile in *.mk; do
+                if [ -f "$mkfile" ]; then
+                    # Extract using grep with simpler pattern
+                    DEVICE_NAME=$(grep -E '^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=' "$mkfile" | head -1 | sed 's/.*:=[[:space:]]*//' | xargs)
+                    BRAND=$(grep -E '^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=' "$mkfile" | head -1 | sed 's/.*:=[[:space:]]*//' | xargs)
+                    
+                    if [ -n "$DEVICE_NAME" ]; then
+                        DEVICE_MAKEFILE="$DEVICE_NAME"
+                        DEVICE_DIRECTORY="device/${BRAND:-$DEVICE_NAME}"
+                        echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> $GITHUB_ENV
+                        echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
+                        echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
+                        break
+                    fi
+                fi
+            done
+        fi
+        
+        # Fallback: use directory name
+        if [ -z "$DEVICE_NAME" ]; then
+            DEVICE_NAME=$(basename "$(pwd)")
+            DEVICE_MAKEFILE="$DEVICE_NAME"
+            DEVICE_DIRECTORY="device/$DEVICE_NAME"
+            echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> $GITHUB_ENV
+            echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
+            echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
+        fi
+        
+        echo "Detected: DEVICE_NAME=${DEVICE_NAME}, DEVICE_DIRECTORY=${DEVICE_DIRECTORY}"
+        
         cd ../
         mkdir -p "$DEVICE_DIRECTORY"
         mv device_tree "$DEVICE_DIRECTORY"/"$DEVICE_NAME"
