@@ -101,16 +101,19 @@ jobs:
         cp -r device_tree/* device/samsung/a22x/
         rm -rf device_tree
 
-    - name: Fix BoardConfig.mk
+    - name: Fix BoardConfig.mk (Remove problematic lines only)
       run: |
         cd android-recovery
+        # Comment out problematic lines in BoardConfig.mk
         sed -i 's/^PLATFORM_SECURITY_PATCH/#PLATFORM_SECURITY_PATCH/g' device/samsung/a22x/BoardConfig.mk || true
         sed -i 's/^PLATFORM_VERSION/#PLATFORM_VERSION/g' device/samsung/a22x/BoardConfig.mk || true
         sed -i 's/^TARGET_RELEASED/#TARGET_RELEASED/g' device/samsung/a22x/BoardConfig.mk || true
-        echo "" >> device/samsung/a22x/BoardConfig.mk
-        echo "# Recovery flags" >> device/samsung/a22x/BoardConfig.mk
-        echo "TARGET_NO_RECOVERY := true" >> device/samsung/a22x/BoardConfig.mk
-        echo "BOARD_USES_RECOVERY_AS_BOOT := true" >> device/samsung/a22x/BoardConfig.mk
+        
+        # Remove any existing recovery flags to prevent conflicts
+        sed -i '/TARGET_NO_RECOVERY/d' device/samsung/a22x/BoardConfig.mk
+        sed -i '/BOARD_USES_RECOVERY_AS_BOOT/d' device/samsung/a22x/BoardConfig.mk
+        
+        # DO NOT add wrong flags - let the existing BoardConfig.mk keep its correct values
 
     - name: Update AndroidProducts.mk
       run: |
@@ -157,7 +160,11 @@ jobs:
           ls -lh out/target/product/a22x/recovery.img
         else
           echo "ERROR: Recovery image not found!"
-          find out/target -name "*.img" 2>/dev/null || echo "No img files"
+          echo "Listing all img files:"
+          find out/target -name "*.img" 2>/dev/null || echo "No img files found"
+          echo ""
+          echo "Listing out/target/product/a22x directory:"
+          ls -la out/target/product/a22x/ 2>/dev/null || echo "Directory not found"
           exit 1
         fi
 
@@ -175,6 +182,8 @@ jobs:
           Branch: ${{ inputs.MANIFEST_BRANCH }}
           Build Date: ${{ env.BUILD_DATE }}
           
-          Installation: fastboot flash recovery recovery.img
+          Installation: 
+          - fastboot flash recovery recovery.img
+          - Or use Odin with tar file
           
           Note: Unofficial build - Use at your own risk
