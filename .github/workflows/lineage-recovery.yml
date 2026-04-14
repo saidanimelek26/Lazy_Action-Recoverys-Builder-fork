@@ -107,12 +107,9 @@ jobs:
     - name: Fix BoardConfig.mk
       run: |
         cd android-recovery
-        # Comment out problematic platform variables that often cause redefinition errors in CI
         sed -i 's/^PLATFORM_SECURITY_PATCH/#PLATFORM_SECURITY_PATCH/g' device/samsung/a22x/BoardConfig.mk || true
         sed -i 's/^PLATFORM_VERSION/#PLATFORM_VERSION/g' device/samsung/a22x/BoardConfig.mk || true
         sed -i 's/^TARGET_RELEASED/#TARGET_RELEASED/g' device/samsung/a22x/BoardConfig.mk || true
-        
-        # Clean up recovery flags to ensure build system takes control
         sed -i '/TARGET_NO_RECOVERY/d' device/samsung/a22x/BoardConfig.mk
         sed -i '/BOARD_USES_RECOVERY_AS_BOOT/d' device/samsung/a22x/BoardConfig.mk
 
@@ -149,9 +146,8 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         lunch lineage_a22x-eng
         
-        # We build 'rootfiles' first to ensure the /out/.../root directory is 
-        # populated before the recovery ramdisk packaging attempts to rsync it.
-        make rootfiles -j$(nproc --all)
+        # Build bootimage first to create the necessary root directory structures
+        make bootimage -j$(nproc --all)
         make recoveryimage -j$(nproc --all)
 
     - name: Set Build Date
@@ -163,8 +159,11 @@ jobs:
         cd android-recovery
         if [ -f "out/target/product/a22x/recovery.img" ]; then
           echo "RECOVERY_PATH=out/target/product/a22x/recovery.img" >> $GITHUB_ENV
+        elif [ -f "out/target/product/a22x/boot.img" ]; then
+          echo "RECOVERY_PATH=out/target/product/a22x/boot.img" >> $GITHUB_ENV
+          echo "NOTE: Recovery is likely inside boot.img"
         else
-          echo "ERROR: Recovery image not found!"
+          echo "ERROR: Image not found!"
           find out/target -name "*.img"
           exit 1
         fi
@@ -179,5 +178,4 @@ jobs:
         body: |
           Lineage Recovery for Samsung Galaxy A22 5G (a22x)
           Build Date: ${{ env.BUILD_DATE }}
-          
-          Note: This is an unofficial recovery build.
+          Target File: ${{ env.RECOVERY_PATH }}
