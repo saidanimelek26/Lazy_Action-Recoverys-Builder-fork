@@ -63,7 +63,10 @@ jobs:
     - name: Prepare the environment
       run: |
         sudo apt update
-        sudo apt -y install bc bison build-essential curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev libwxgtk3.0-gtk3-dev openjdk-8-jdk python3
+        sudo apt -y install bc bison build-essential curl flex g++-multilib gcc-multilib git gnupg gperf \
+        imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 \
+        libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
+        schedtool squashfs-tools xsltproc zip zlib1g-dev libwxgtk3.0-gtk3-dev openjdk-8-jdk python3
 
     - name: Install Git-Repo
       run: |
@@ -83,7 +86,7 @@ jobs:
     - name: Repo Sync
       run: |
         cd android-recovery
-        repo sync -j$(nproc --all) --force-sync
+        repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle
 
     - name: Clone Device Tree
       run: |
@@ -101,43 +104,43 @@ jobs:
         cp -r device_tree/* device/samsung/a22x/
         rm -rf device_tree
 
-    - name: Fix BoardConfig.mk (Remove problematic lines only)
+    - name: Fix BoardConfig.mk
       run: |
         cd android-recovery
-        # Comment out problematic lines in BoardConfig.mk
+        # Comment out problematic platform variables that often cause redefinition errors in CI
         sed -i 's/^PLATFORM_SECURITY_PATCH/#PLATFORM_SECURITY_PATCH/g' device/samsung/a22x/BoardConfig.mk || true
         sed -i 's/^PLATFORM_VERSION/#PLATFORM_VERSION/g' device/samsung/a22x/BoardConfig.mk || true
         sed -i 's/^TARGET_RELEASED/#TARGET_RELEASED/g' device/samsung/a22x/BoardConfig.mk || true
         
-        # Remove any existing recovery flags to prevent conflicts
+        # Clean up recovery flags to ensure build system takes control
         sed -i '/TARGET_NO_RECOVERY/d' device/samsung/a22x/BoardConfig.mk
         sed -i '/BOARD_USES_RECOVERY_AS_BOOT/d' device/samsung/a22x/BoardConfig.mk
-        
-        # DO NOT add wrong flags - let the existing BoardConfig.mk keep its correct values
 
     - name: Update AndroidProducts.mk
       run: |
         cd android-recovery
         echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/lineage_a22x.mk" > device/samsung/a22x/AndroidProducts.mk
-        echo "COMMON_LUNCH_CHOICES := lineage_a22x-user lineage_a22x-userdebug lineage_a22x-eng" >> device/samsung/a22x/AndroidProducts.mk
+        echo "COMMON_LUNCH_CHOICES := lineage_a22x-userdebug lineage_a22x-eng" >> device/samsung/a22x/AndroidProducts.mk
 
     - name: Create lineage_a22x.mk
       run: |
         cd android-recovery
-        echo "# Inherit from device makefile" > device/samsung/a22x/lineage_a22x.mk
-        echo "\$(call inherit-product, device/samsung/a22x/device.mk)" >> device/samsung/a22x/lineage_a22x.mk
-        echo "" >> device/samsung/a22x/lineage_a22x.mk
-        echo "# Inherit common Lineage stuff" >> device/samsung/a22x/lineage_a22x.mk
-        echo "\$(call inherit-product, vendor/lineage/config/common_full_phone.mk)" >> device/samsung/a22x/lineage_a22x.mk
-        echo "" >> device/samsung/a22x/lineage_a22x.mk
-        echo "# Device identifier" >> device/samsung/a22x/lineage_a22x.mk
-        echo "PRODUCT_NAME := lineage_a22x" >> device/samsung/a22x/lineage_a22x.mk
-        echo "PRODUCT_DEVICE := a22x" >> device/samsung/a22x/lineage_a22x.mk
-        echo "PRODUCT_BRAND := samsung" >> device/samsung/a22x/lineage_a22x.mk
-        echo "PRODUCT_MODEL := SM-A226B" >> device/samsung/a22x/lineage_a22x.mk
-        echo "PRODUCT_MANUFACTURER := samsung" >> device/samsung/a22x/lineage_a22x.mk
-        echo "" >> device/samsung/a22x/lineage_a22x.mk
-        echo "PRODUCT_GMS_CLIENTID_BASE := android-samsung" >> device/samsung/a22x/lineage_a22x.mk
+        cat <<EOF > device/samsung/a22x/lineage_a22x.mk
+        # Inherit from device makefile
+        \$(call inherit-product, device/samsung/a22x/device.mk)
+
+        # Inherit common Lineage stuff
+        \$(call inherit-product, vendor/lineage/config/common_full_phone.mk)
+
+        # Device identifier
+        PRODUCT_NAME := lineage_a22x
+        PRODUCT_DEVICE := a22x
+        PRODUCT_BRAND := samsung
+        PRODUCT_MODEL := SM-A226B
+        PRODUCT_MANUFACTURER := samsung
+
+        PRODUCT_GMS_CLIENTID_BASE := android-samsung
+        EOF
 
     - name: Build Lineage Recovery
       run: |
@@ -145,7 +148,10 @@ jobs:
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         lunch lineage_a22x-eng
-        make clean
+        
+        # We build 'rootfiles' first to ensure the /out/.../root directory is 
+        # populated before the recovery ramdisk packaging attempts to rsync it.
+        make rootfiles -j$(nproc --all)
         make recoveryimage -j$(nproc --all)
 
     - name: Set Build Date
@@ -157,14 +163,9 @@ jobs:
         cd android-recovery
         if [ -f "out/target/product/a22x/recovery.img" ]; then
           echo "RECOVERY_PATH=out/target/product/a22x/recovery.img" >> $GITHUB_ENV
-          ls -lh out/target/product/a22x/recovery.img
         else
           echo "ERROR: Recovery image not found!"
-          echo "Listing all img files:"
-          find out/target -name "*.img" 2>/dev/null || echo "No img files found"
-          echo ""
-          echo "Listing out/target/product/a22x directory:"
-          ls -la out/target/product/a22x/ 2>/dev/null || echo "Directory not found"
+          find out/target -name "*.img"
           exit 1
         fi
 
@@ -176,14 +177,7 @@ jobs:
         name: Lineage Recovery for Samsung A22x (${{ env.BUILD_DATE }})
         tag_name: recovery_a22x_${{ github.run_id }}
         body: |
-          Lineage Recovery for Samsung Galaxy A22 5G
-          
-          Device: Samsung Galaxy A22 5G (a22x)
-          Branch: ${{ inputs.MANIFEST_BRANCH }}
+          Lineage Recovery for Samsung Galaxy A22 5G (a22x)
           Build Date: ${{ env.BUILD_DATE }}
           
-          Installation: 
-          - fastboot flash recovery recovery.img
-          - Or use Odin with tar file
-          
-          Note: Unofficial build - Use at your own risk
+          Note: This is an unofficial recovery build.
