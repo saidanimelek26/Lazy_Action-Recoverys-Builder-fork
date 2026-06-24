@@ -20,15 +20,15 @@ on:
         - twrp-5.1
         - twrp-4.4-deprecated
       DEVICE_TREE:
-        description: 'Custom Recovery Tree'
+        description: 'Custom Recovery Tree' # Your already made Device Tree for TWRP
         required: true
         default: 'https://github.com/oliplusmzr/recovery_device_samsung_a24'
       DEVICE_TREE_BRANCH:
-        description: 'Custom Recovery Tree Branch'
+        description: 'Custom Recovery Tree Branch' # Your Device Tree Branch, make sure it's right.
         required: true
         default: 'TWRP'
       BUILD_TARGET:
-        description: 'Specify your Build Target'
+        description: 'Specify your Build Target' # Pick among boot, recovery and vendor_boot
         required: true
         default: 'recovery'
         type: choice
@@ -42,7 +42,7 @@ on:
         default: 'false'
         type: boolean
       LDCHECKPATH:
-        description: 'Path of blobs to check'
+        description: 'Path of blobs to check' # Use it know what kind of dependencies your missing for decryption blobs.
         required: true
         default: 'system/bin/qseecomd'
 
@@ -93,7 +93,7 @@ jobs:
         sudo apt -y upgrade
         sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib libc6-dev lib32ncurses5-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libwxgtk3.0-gtk3-dev libxml2 lzop pngcrush schedtool squashfs-tools imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libtinfo5 libgflags-dev libncurses5 python3
 
-    - name: Install JDK for modern builds (JDK 8)
+    - name: Install OpenJDK 8 for modern builds
       if: env.USE_JDK8 == 'true'
       uses: actions/setup-java@v4
       with:
@@ -112,9 +112,13 @@ jobs:
         sudo mkdir -p /usr/lib/jvm
         sudo tar -xzf jdk-7u80-linux-x64.tar.gz -C /usr/lib/jvm/
         
-        # Set as default
+        # Set as default for this session
         export JAVA_HOME=/usr/lib/jvm/jdk1.7.0_80
         export PATH=$JAVA_HOME/bin:$PATH
+        
+        # Save to environment for later steps
+        echo "JAVA_HOME=/usr/lib/jvm/jdk1.7.0_80" >> $GITHUB_ENV
+        echo "PATH=/usr/lib/jvm/jdk1.7.0_80/bin:$PATH" >> $GITHUB_ENV
         
         # Verify
         java -version
@@ -189,17 +193,18 @@ jobs:
         sudo rm -rf /usr/bin/python
         sudo ln -s python2 /usr/bin/python
 
-    - name: Set JAVA_HOME for legacy builds
-      if: env.USE_JDK8 == 'false'
-      run: |
-        echo "JAVA_HOME=/usr/lib/jvm/jdk1.7.0_80" >> $GITHUB_ENV
-        echo "PATH=/usr/lib/jvm/jdk1.7.0_80/bin:$PATH" >> $GITHUB_ENV
-
     - name: Building Image 
       run: |
         cd android-recovery
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
+        
+        # Ensure Java environment is set for legacy builds
+        if [ "${{ env.USE_JDK8 }}" == "false" ]; then
+            export JAVA_HOME=/usr/lib/jvm/jdk1.7.0_80
+            export PATH=$JAVA_HOME/bin:$PATH
+        fi
+        
         lunch ${{ env.DEVICE_MAKEFILE }}-eng && make clean && make ${{ inputs.BUILD_TARGET }}image -j$(nproc --all)
         echo "Done building your ${{ inputs.BUILD_TARGET }}.img"
 
@@ -213,7 +218,7 @@ jobs:
            echo "BUILD_TARGET_NAME=vendor_boot" >> $GITHUB_ENV
         fi
 
-    - name: Set Build Date
+    - name: Set Build Date # Output will be use in Release
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
       
